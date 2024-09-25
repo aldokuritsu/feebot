@@ -14,80 +14,104 @@ use tokio::signal;
 
 struct Handler {
     channel_id: ChannelId,
+    fee_threshold: u64,
 }
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!("Connecté en tant que {}", ready.user.name);
-    
+
+        // Envoyer le message initial
         if let Err(e) = self.channel_id.say(&ctx.http, "Bot est prêt et connecté !").await {
             error!("Erreur lors de l'envoi du message de test : {}", e);
         } else {
             info!("Message de test envoyé avec succès.");
         }
-    
-        // Lancer la tâche de vérification des frais
-        tokio::spawn(check_fees(ctx));
+
+        // Récupérer les frais actuels et envoyer un message d'information
+        match fetch_fee_data().await {
+            Ok(data) => {
+                let current_fee = data.fastestFee;
+                let message = format!(
+                    "🔍 **Frais de Transaction Actuels**\n\
+                    - Fastest Fee: {} sat/vByte\n\
+                    - Half Hour Fee: {} sat/vByte\n\
+                    - Hour Fee: {} sat/vByte\n\n\
+                    ⚠️ **Alerte activée pour les frais ≤ {} sat/vByte**",
+                    data.fastestFee, data.halfHourFee, data.hourFee, self.fee_threshold
+                );
+
+                if let Err(e) = self.channel_id.say(&ctx.http, message).await {
+                    error!("Erreur lors de l'envoi du message des frais actuels : {}", e);
+                } else {
+                    info!("Message des frais actuels envoyé avec succès.");
+                }
+            }
+            Err(e) => {
+                error!("Erreur lors de la récupération des frais actuels : {}", e);
+                if let Err(e) = self.channel_id.say(&ctx.http, "⚠️ Impossible de récupérer les frais actuels.").await {
+                    error!("Erreur lors de l'envoi du message d'erreur : {}", e);
+                }
+            }
+        }
+
+        // Lancer la tâche de vérification des frais toutes les 10 minutes
+        tokio::spawn(check_fees(ctx, self.channel_id, self.fee_threshold));
     }
 }
 
 #[derive(Deserialize)]
 struct FeeData {
-    fastestFee: u64, // sat/vByte
+    fastestFee: u64,   // sat/vByte
     halfHourFee: u64,
     hourFee: u64,
 }
 
-async fn check_fees(ctx: Context) {
-    // Récupérer les variables d'environnement
-    let channel_id = env::var("CHANNEL_ID")
-        .expect("CHANNEL_ID non définie")
-        .parse::<u64>()
-        .expect("CHANNEL_ID doit être un nombre");
+async fn fetch_fee_data() -> Result<FeeData, reqwest::Error> {
+    let api_url = "https://mempool.space/api/v1/fees/recommended";
+    let response = reqwest::get(api_url).await?;
+    let data = response.json::<FeeData>().await?;
+    Ok(data)
+}
 
-    let channel_id = ChannelId(channel_id);
+async fn check_fees(ctx: Context, channel_id: ChannelId, fee_threshold: u64) {
+    info!("La tâche de vérification des frais a démarré.");
 
     let api_url = "https://mempool.space/api/v1/fees/recommended";
-    let fee_threshold = 2;
     let mut last_notified = false;
 
     loop {
-        match reqwest::get(api_url).await {
-            Ok(response) => {
-                match response.json::<FeeData>().await {
-                    Ok(data) => {
-                        let current_fee = data.fastestFee;
-                        info!("Frais actuels : {} sat/vByte", current_fee);
+        info!("Vérification des frais...");
+        match fetch_fee_data().await {
+            Ok(data) => {
+                let current_fee = data.fastestFee;
+                info!("Frais actuels : {} sat/vByte", current_fee);
 
-                        if current_fee <= fee_threshold && !last_notified {
-                            if let Err(e) = channel_id.say(&ctx.http, format!(
-                                "⚠️ Les frais de transaction Bitcoin sont maintenant à {} sat/vByte!",
-                                current_fee
-                            )).await {
-                                error!("Erreur lors de l'envoi du message : {}", e);
-                            } else {
-                                last_notified = true;
-                                info!("Notification envoyée.");
-                            }
-                        } else if current_fee > fee_threshold && last_notified {
-                            // Réinitialise la notification lorsque les frais remontent au-dessus du seuil
-                            last_notified = false;
-                            info!("Frais de transaction réinitialisés.");
-                        }
+                if current_fee <= fee_threshold && !last_notified {
+                    let alert_message = format!(
+                        "⚠️ Les frais de transaction Bitcoin sont maintenant à {} sat/vByte!",
+                        current_fee
+                    );
+                    if let Err(e) = channel_id.say(&ctx.http, alert_message).await {
+                        error!("Erreur lors de l'envoi du message d'alerte : {}", e);
+                    } else {
+                        last_notified = true;
+                        info!("Alerte envoyée pour les frais de {} sat/vByte.", current_fee);
                     }
-                    Err(e) => {
-                        error!("Erreur lors de la désérialisation des données : {}", e);
-                    }
+                } else if current_fee > fee_threshold && last_notified {
+                    // Réinitialise la notification lorsque les frais remontent au-dessus du seuil
+                    last_notified = false;
+                    info!("Frais de transaction réinitialisés.");
                 }
             }
             Err(e) => {
-                error!("Erreur lors de la requête à l'API : {}", e);
+                error!("Erreur lors de la désérialisation des données : {}", e);
             }
         }
 
-        // Attendre 5 minutes avant la prochaine vérification
-        sleep(Duration::from_secs(300)).await;
+        // Attendre 10 minutes avant la prochaine vérification
+        sleep(Duration::from_secs(600)).await;
     }
 }
 
@@ -116,12 +140,20 @@ async fn main() {
 
     let channel_id = ChannelId(channel_id);
 
-    // Définir les intents nécessaires pour recevoir l'événement Ready
+    // Définir les intents nécessaires pour recevoir les événements
     let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::DIRECT_MESSAGES;
 
+    // Définir le seuil de frais pour les alertes
+    let fee_threshold = 2;
+
     // Créer le client avec le gestionnaire d'événements
+    let handler = Handler {
+        channel_id,
+        fee_threshold,
+    };
+
     let mut client = Client::builder(&token, intents)
-        .event_handler(Handler { channel_id })
+        .event_handler(handler)
         .await
         .expect("Erreur lors de la création du client");
     info!("Client créé.");
