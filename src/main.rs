@@ -144,7 +144,7 @@ async fn main() {
     let intents = GatewayIntents::GUILDS | GatewayIntents::GUILD_MESSAGES | GatewayIntents::DIRECT_MESSAGES;
 
     // Définir le seuil de frais pour les alertes
-    let fee_threshold = 2;
+    let fee_threshold = 5;
 
     // Créer le client avec le gestionnaire d'événements
     let handler = Handler {
