@@ -32,14 +32,14 @@ impl EventHandler for Handler {
         // Récupérer les frais actuels et envoyer un message d'information
         match fetch_fee_data().await {
             Ok(data) => {
-                let current_fee = data.fastestFee;
+                let _current_fee = data.fastest_fee;
                 let message = format!(
                     "🔍 **Frais de Transaction Actuels**\n\
                     - Fastest Fee: {} sat/vByte\n\
                     - Half Hour Fee: {} sat/vByte\n\
                     - Hour Fee: {} sat/vByte\n\n\
                     ⚠️ **Alerte activée pour les frais ≤ {} sat/vByte**",
-                    data.fastestFee, data.halfHourFee, data.hourFee, self.fee_threshold
+                    data.fastest_fee, data.half_hour_fee, data.hour_fee, self.fee_threshold
                 );
 
                 if let Err(e) = self.channel_id.say(&ctx.http, message).await {
@@ -63,14 +63,19 @@ impl EventHandler for Handler {
 
 #[derive(Deserialize)]
 struct FeeData {
-    fastestFee: u64,   // sat/vByte
-    halfHourFee: u64,
-    hourFee: u64,
+    #[serde(rename = "fastestFee")]
+    fastest_fee: u64,   // sat/vByte
+    
+    #[serde(rename = "halfHourFee")]
+    half_hour_fee: u64,
+    
+    #[serde(rename = "hourFee")]
+    hour_fee: u64,
 }
 
 async fn fetch_fee_data() -> Result<FeeData, reqwest::Error> {
-    let api_url = "https://mempool.space/api/v1/fees/recommended";
-    let response = reqwest::get(api_url).await?;
+    let _api_url = "https://mempool.space/api/v1/fees/recommended";
+    let response = reqwest::get(_api_url).await?;
     let data = response.json::<FeeData>().await?;
     Ok(data)
 }
@@ -78,14 +83,14 @@ async fn fetch_fee_data() -> Result<FeeData, reqwest::Error> {
 async fn check_fees(ctx: Context, channel_id: ChannelId, fee_threshold: u64) {
     info!("La tâche de vérification des frais a démarré.");
 
-    let api_url = "https://mempool.space/api/v1/fees/recommended";
+    let _api_url = "https://mempool.space/api/v1/fees/recommended";
     let mut last_notified = false;
 
     loop {
         info!("Vérification des frais...");
         match fetch_fee_data().await {
             Ok(data) => {
-                let current_fee = data.fastestFee;
+                let current_fee = data.fastest_fee;
                 info!("Frais actuels : {} sat/vByte", current_fee);
 
                 if current_fee <= fee_threshold && !last_notified {
