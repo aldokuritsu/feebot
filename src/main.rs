@@ -84,7 +84,8 @@ async fn check_fees(ctx: Context, channel_id: ChannelId, fee_threshold: u64) {
     info!("La tâche de vérification des frais a démarré.");
 
     let _api_url = "https://mempool.space/api/v1/fees/recommended";
-    let mut last_notified = false;
+    let mut last_notified_low = false;
+    let mut last_notified_high = false;
 
     loop {
         info!("Vérification des frais...");
@@ -93,21 +94,34 @@ async fn check_fees(ctx: Context, channel_id: ChannelId, fee_threshold: u64) {
                 let current_fee = data.fastest_fee;
                 info!("Frais actuels : {} sat/vByte", current_fee);
 
-                if current_fee <= fee_threshold && !last_notified {
+                // Alerte pour frais inférieurs ou égaux au seuil
+                if current_fee <= fee_threshold && !last_notified_low {
                     let alert_message = format!(
-                        "⚠️ Les frais de transaction Bitcoin sont maintenant à {} sat/vByte!",
-                        current_fee
+                        "⚠️ Les frais de transaction Bitcoin sont maintenant à {} sat/vByte, sous le seuil de {} sat/vByte!",
+                        current_fee, fee_threshold
                     );
                     if let Err(e) = channel_id.say(&ctx.http, alert_message).await {
                         error!("Erreur lors de l'envoi du message d'alerte : {}", e);
                     } else {
-                        last_notified = true;
-                        info!("Alerte envoyée pour les frais de {} sat/vByte.", current_fee);
+                        last_notified_low = true;
+                        last_notified_high = false; // Réinitialiser l'autre alerte
+                        info!("Alerte envoyée pour les frais inférieurs à {} sat/vByte.", fee_threshold);
                     }
-                } else if current_fee > fee_threshold && last_notified {
-                    // Réinitialise la notification lorsque les frais remontent au-dessus du seuil
-                    last_notified = false;
-                    info!("Frais de transaction réinitialisés.");
+                }
+
+                // Alerte pour frais supérieurs au seuil
+                else if current_fee > fee_threshold && !last_notified_high {
+                    let alert_message = format!(
+                        "⚠️ Les frais de transaction Bitcoin sont maintenant à {} sat/vByte, au-dessus du seuil de {} sat/vByte!",
+                        current_fee, fee_threshold
+                    );
+                    if let Err(e) = channel_id.say(&ctx.http, alert_message).await {
+                        error!("Erreur lors de l'envoi du message d'alerte : {}", e);
+                    } else {
+                        last_notified_high = true;
+                        last_notified_low = false; // Réinitialiser l'autre alerte
+                        info!("Alerte envoyée pour les frais supérieurs à {} sat/vByte.", fee_threshold);
+                    }
                 }
             }
             Err(e) => {
@@ -119,6 +133,7 @@ async fn check_fees(ctx: Context, channel_id: ChannelId, fee_threshold: u64) {
         sleep(Duration::from_secs(600)).await;
     }
 }
+
 
 #[tokio::main]
 async fn main() {
